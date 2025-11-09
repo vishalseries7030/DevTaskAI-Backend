@@ -29,6 +29,11 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Compression middleware
 app.use(compression());
 
+// ✅ Root route (for Render & testing)
+app.get('/', (req, res) => {
+  res.send('Backend is live 🚀');
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.status(200).json({ success: true, message: 'Server is running' });
@@ -44,10 +49,12 @@ const uploadRoutes = require('./routes/uploads');
 const aiRoutes = require('./routes/ai');
 const toolsRoutes = require('./routes/tools');
 
+// API version route
 app.get('/api/v1', (req, res) => {
   res.json({ success: true, message: 'DevTask API v1' });
 });
 
+// Mount routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/projects', projectRoutes);
 app.use('/api/v1/projects/:projectId/tasks', taskRoutes);
