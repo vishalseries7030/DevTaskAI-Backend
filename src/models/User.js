@@ -13,15 +13,27 @@ const userSchema = new mongoose.Schema(
     email: {
       type: String,
       required: [true, 'Email is required'],
-      unique: true,
+      unique: true,  // This already creates an index
       lowercase: true,
       trim: true,
       match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email'],
     },
+    // passwordHash is optional for OAuth users (Google/GitHub/Facebook)
     passwordHash: {
       type: String,
-      required: [true, 'Password is required'],
       minlength: [6, 'Password must be at least 6 characters'],
+    },
+    // OAuth provider fields
+    provider: {
+      type: String,
+      enum: ['local', 'google', 'github', 'facebook'],
+      default: 'local',
+    },
+    providerId: {
+      type: String, // OAuth provider's user ID
+    },
+    avatar: {
+      type: String, // Profile picture URL from OAuth
     },
     role: {
       type: String,
@@ -31,7 +43,7 @@ const userSchema = new mongoose.Schema(
     aiQuota: {
       daily: {
         type: Number,
-        default: 3,
+        default: 10,
       },
       used: {
         type: Number,
@@ -52,15 +64,18 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Index for faster email lookups
-userSchema.index({ email: 1 });
+// Compound index for OAuth lookups — email index already created by unique:true above
+userSchema.index({ provider: 1, providerId: 1 });
 
-// Hash password before saving
+// Hash password before saving — only for local auth users
 userSchema.pre('save', async function (next) {
-  if (!this.isModified('passwordHash')) {
+  if (!this.isModified('passwordHash') || !this.passwordHash) {
     return next();
   }
-
+  // Skip if already hashed (bcrypt hashes start with $2b$)
+  if (this.passwordHash.startsWith('$2b$')) {
+    return next();
+  }
   try {
     const salt = await bcrypt.genSalt(10);
     this.passwordHash = await bcrypt.hash(this.passwordHash, salt);
@@ -72,6 +87,7 @@ userSchema.pre('save', async function (next) {
 
 // Method to compare password
 userSchema.methods.comparePassword = async function (candidatePassword) {
+  if (!this.passwordHash) return false;
   return await bcrypt.compare(candidatePassword, this.passwordHash);
 };
 

@@ -2,6 +2,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const compression = require('compression');
+const passport = require('./config/passport');
 const { initSentry, sentryErrorHandler } = require('./config/sentry');
 const { celebrateErrorHandler, globalErrorHandler } = require('./middleware/errorHandler');
 const logger = require('./config/logger');
@@ -41,6 +42,9 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Compression middleware
 app.use(compression());
+
+// Passport (stateless OAuth — no session needed, just initializing strategies)
+app.use(passport.initialize());
 
 // ✅ Root route (for Render & testing)
 app.get('/', (req, res) => {

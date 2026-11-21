@@ -1,6 +1,24 @@
-const { generateBugFixSuggestion, generateCode } = require('../utils/aiHelper');
+const { generateBugFixSuggestion, generateCode, generateTasksFromGoal } = require('../utils/aiHelper');
 const User = require('../models/User');
 const UsageLog = require('../models/UsageLog');
+
+// Helper: check quota, return user or error response
+const checkQuota = async (userId, res) => {
+  const user = await User.findById(userId);
+  user.checkAndResetQuota();
+  if (user.aiQuota.used >= user.aiQuota.daily) {
+    res.status(429).json({
+      success: false,
+      error: {
+        code: 'AI_QUOTA_EXCEEDED',
+        message: `Daily AI quota exhausted (${user.aiQuota.daily}/day). Resets at midnight UTC.`,
+        details: { resetAt: user.aiQuota.resetAt },
+      },
+    });
+    return null;
+  }
+  return user;
+};
 
 // @desc    Get AI bug fix suggestion
 // @route   POST /api/v1/ai/suggest-fix
@@ -12,32 +30,13 @@ const suggestFix = async (req, res) => {
     if (!bugDescription) {
       return res.status(400).json({
         success: false,
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Bug description is required',
-        },
+        error: { code: 'VALIDATION_ERROR', message: 'Bug description is required' },
       });
     }
 
-    // Check and reset user quota
-    const user = await User.findById(req.user.id);
-    user.checkAndResetQuota();
+    const user = await checkQuota(req.user.id, res);
+    if (!user) return;
 
-    // Check if user has quota remaining
-    if (user.aiQuota.used >= user.aiQuota.daily) {
-      return res.status(429).json({
-        success: false,
-        error: {
-          code: 'AI_QUOTA_EXCEEDED',
-          message: 'Daily AI quota exhausted. Resets at midnight UTC.',
-          details: {
-            resetAt: user.aiQuota.resetAt,
-          },
-        },
-      });
-    }
-
-    // Generate AI suggestion
     const { suggestion, tokensUsed } = await generateBugFixSuggestion(
       bugTitle || 'Bug Report',
       bugDescription,
@@ -45,19 +44,13 @@ const suggestFix = async (req, res) => {
       language
     );
 
-    // Update user quota
     user.aiQuota.used += 1;
     await user.save();
 
-    // Log usage
     await UsageLog.create({
       user: req.user.id,
       action: 'ai_request',
-      meta: {
-        endpoint: '/ai/suggest-fix',
-        tokensUsed,
-        success: true,
-      },
+      meta: { endpoint: '/ai/suggest-fix', tokensUsed, success: true },
     });
 
     res.status(200).json({
@@ -68,24 +61,16 @@ const suggestFix = async (req, res) => {
     });
   } catch (error) {
     console.error('AI suggest fix error:', error);
-
-    // Log failed usage
-    await UsageLog.create({
-      user: req.user.id,
-      action: 'ai_request',
-      meta: {
-        endpoint: '/ai/suggest-fix',
-        success: false,
-        errorMessage: error.message,
-      },
-    });
-
+    try {
+      await UsageLog.create({
+        user: req.user.id,
+        action: 'ai_request',
+        meta: { endpoint: '/ai/suggest-fix', success: false, errorMessage: error.message },
+      });
+    } catch (_) {}
     res.status(502).json({
       success: false,
-      error: {
-        code: 'AI_SERVICE_ERROR',
-        message: error.message || 'Error generating AI suggestion',
-      },
+      error: { code: 'AI_SERVICE_ERROR', message: error.message || 'Error generating AI suggestion' },
     });
   }
 };
@@ -100,47 +85,22 @@ const generateSnippet = async (req, res) => {
     if (!prompt || !language) {
       return res.status(400).json({
         success: false,
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Prompt and language are required',
-        },
+        error: { code: 'VALIDATION_ERROR', message: 'Prompt and language are required' },
       });
     }
 
-    // Check and reset user quota
-    const user = await User.findById(req.user.id);
-    user.checkAndResetQuota();
+    const user = await checkQuota(req.user.id, res);
+    if (!user) return;
 
-    // Check if user has quota remaining
-    if (user.aiQuota.used >= user.aiQuota.daily) {
-      return res.status(429).json({
-        success: false,
-        error: {
-          code: 'AI_QUOTA_EXCEEDED',
-          message: 'Daily AI quota exhausted. Resets at midnight UTC.',
-          details: {
-            resetAt: user.aiQuota.resetAt,
-          },
-        },
-      });
-    }
-
-    // Generate code
     const { code, tokensUsed } = await generateCode(prompt, language);
 
-    // Update user quota
     user.aiQuota.used += 1;
     await user.save();
 
-    // Log usage
     await UsageLog.create({
       user: req.user.id,
       action: 'ai_request',
-      meta: {
-        endpoint: '/ai/generate-snippet',
-        tokensUsed,
-        success: true,
-      },
+      meta: { endpoint: '/ai/generate-snippet', tokensUsed, success: true },
     });
 
     res.status(200).json({
@@ -151,24 +111,16 @@ const generateSnippet = async (req, res) => {
     });
   } catch (error) {
     console.error('AI generate snippet error:', error);
-
-    // Log failed usage
-    await UsageLog.create({
-      user: req.user.id,
-      action: 'ai_request',
-      meta: {
-        endpoint: '/ai/generate-snippet',
-        success: false,
-        errorMessage: error.message,
-      },
-    });
-
+    try {
+      await UsageLog.create({
+        user: req.user.id,
+        action: 'ai_request',
+        meta: { endpoint: '/ai/generate-snippet', success: false, errorMessage: error.message },
+      });
+    } catch (_) {}
     res.status(502).json({
       success: false,
-      error: {
-        code: 'AI_SERVICE_ERROR',
-        message: error.message || 'Error generating code',
-      },
+      error: { code: 'AI_SERVICE_ERROR', message: error.message || 'Error generating code' },
     });
   }
 };
@@ -183,107 +135,42 @@ const generateTasks = async (req, res) => {
     if (!goal) {
       return res.status(400).json({
         success: false,
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Goal description is required',
-        },
+        error: { code: 'VALIDATION_ERROR', message: 'Goal description is required' },
       });
     }
 
-    // Check AI quota
-    await req.user.checkAndResetQuota();
-    if (req.user.aiQuota.used >= req.user.aiQuota.daily) {
-      return res.status(429).json({
-        success: false,
-        error: {
-          code: 'QUOTA_EXCEEDED',
-          message: 'Daily AI quota exceeded. Please try again tomorrow.',
-        },
-      });
-    }
+    const user = await checkQuota(req.user.id, res);
+    if (!user) return;
 
-    // Construct prompt for task generation
-    const prompt = `You are a project management AI assistant. Convert the following goal into a structured list of actionable tasks.
+    // Uses aiHelper — no undefined genAI reference
+    const { tasks, tokensUsed } = await generateTasksFromGoal(goal);
 
-Goal: ${goal}
+    user.aiQuota.used += 1;
+    await user.save();
 
-Generate 5-8 specific, actionable tasks. For each task, provide:
-1. A clear, concise title (max 60 characters)
-2. A detailed description (2-3 sentences)
-3. Priority level (high, medium, or low)
-
-Return ONLY a valid JSON array in this exact format:
-[
-  {
-    "title": "Task title here",
-    "description": "Detailed description here",
-    "priority": "high"
-  }
-]
-
-Important: Return ONLY the JSON array, no additional text or markdown.`;
-
-    // Call Gemini AI
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-
-    // Parse the response
-    let tasks = [];
-    try {
-      // Extract JSON from response
-      const jsonMatch = text.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        tasks = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('No valid JSON found in response');
-      }
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', text);
-      return res.status(500).json({
-        success: false,
-        error: {
-          code: 'AI_PARSE_ERROR',
-          message: 'Failed to parse AI response. Please try again.',
-        },
-      });
-    }
-
-    // Update user's AI quota
-    req.user.aiQuota.used += 1;
-    await req.user.save();
-
-    // Log AI usage
     await UsageLog.create({
-      user: req.user._id,
-      action: 'generate_tasks',
-      tokensUsed: response.usageMetadata?.totalTokenCount || 0,
-      metadata: {
-        goal: goal.substring(0, 100),
-        tasksGenerated: tasks.length,
+      user: req.user.id,
+      action: 'ai_request',
+      meta: {
+        endpoint: '/ai/generate-tasks',
+        tokensUsed,
+        success: true,
       },
     });
 
     res.status(200).json({
       success: true,
       tasks,
-      quotaRemaining: req.user.aiQuota.daily - req.user.aiQuota.used,
+      tokensUsed,
+      quotaRemaining: user.aiQuota.daily - user.aiQuota.used,
     });
   } catch (error) {
     console.error('AI task generation error:', error);
     res.status(500).json({
       success: false,
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: 'Failed to generate tasks. Please try again.',
-      },
+      error: { code: 'AI_SERVICE_ERROR', message: error.message || 'Failed to generate tasks' },
     });
   }
 };
 
-module.exports = {
-  suggestFix,
-  generateSnippet,
-  generateTasks,
-};
+module.exports = { suggestFix, generateSnippet, generateTasks };
