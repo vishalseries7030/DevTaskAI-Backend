@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: devtaskai-backend-1
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node src/server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: FRONTEND_URL
+        value: https://dev-task-ai-frontend.vercel.app
+      - key: BACKEND_URL
+        value: https://devtaskai-backend-1.onrender.com
+      - key: AI_DAILY_QUOTA
+        value: "10"
